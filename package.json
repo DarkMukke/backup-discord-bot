@@ -1,0 +1,21 @@
+{
+  "name": "discord-backup-bot",
+  "version": "1.0.0",
+  "description": "Discord channel backup bot (PostgreSQL + discord.js)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "connect-pg-simple": "^10.0.0",
+    "cors": "^2.8.5",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.12.0"
+  }
+}
