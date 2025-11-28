@@ -114,4 +114,28 @@ owner to discord_bot_user;
 
 create index "IDX_session_expire"
 on public.session (expire);
+
+create table public.stored_attachments
+(
+    id                    bigserial                              primary key,
+    discord_attachment_id bigint                                 not null,
+    message_id            bigint                                 not null                 
+        references public.messages on delete cascade,
+    filename              text                                   not null,
+    size_bytes            bigint                                 not null,
+    content_type          text,
+    url                   text,
+    blob_data             bytea                                  not null,
+    created_at            timestamp with time zone default now() not null
+);
+
+alter table public.stored_attachments
+    owner to discord_bot_user;
+
+create index stored_attachments_msg_idx
+    on public.stored_attachments (message_id);
+
+create index stored_attachments_msg_filename_idx
+    on public.stored_attachments (message_id, filename);
+
 ```

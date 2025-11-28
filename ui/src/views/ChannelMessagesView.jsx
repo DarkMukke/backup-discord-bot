@@ -14,6 +14,9 @@ import {
     Button,
 } from '@mui/material';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
+import AttachFileIcon from '@mui/icons-material/AttachFile'; //[web:711][web:709]
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function ChannelMessagesView() {
     const { channelId } = useParams();
@@ -40,21 +43,21 @@ export default function ChannelMessagesView() {
         tokens.map((t, idx) => {
             if (t.type === 'user') {
                 return (
-                    <span key={idx} style={{ color: '#8ab4f8', fontWeight: 500 }}>
+                    <span key={idx} style={{ color: '#8ab4f8', fontWeight: 500, margin: '5px' }}>
           {t.label}
         </span>
                 );
             }
             if (t.type === 'role') {
                 return (
-                    <span key={idx} style={{ color: '#f5a97f', fontWeight: 500 }}>
+                    <span key={idx} style={{ color: '#f5a97f', fontWeight: 500, margin: '5px' }}>
           {t.label}
         </span>
                 );
             }
             if (t.type === 'channel') {
                 return (
-                    <span key={idx} style={{ color: '#7dc4e4', fontWeight: 500 }}>
+                    <span key={idx} style={{ color: '#7dc4e4', fontWeight: 500, margin: '5px' }}>
           {t.label}
         </span>
                 );
@@ -91,8 +94,44 @@ export default function ChannelMessagesView() {
         </span>
                 );
             }
-            // plain text
-            return <span key={idx}>{t.text}</span>;
+            if (t.type === 'emoji') {
+                const ext = t.animated ? 'gif' : 'png';
+                const src = `https://cdn.discordapp.com/emojis/${t.id}.${ext}`;
+                // Discord serves custom emojis from this CDN URL pattern[web:743][web:746]
+
+                return (
+                    <img
+                        key={idx}
+                        src={src}
+                        alt={t.name}
+                        title={t.name}
+                        style={{
+                            width: 22,
+                            height: 22,
+                            verticalAlign: 'text-bottom',
+                            margin: '0 2px',
+                        }}
+                    />
+                );
+            }
+            if (t.type === 'tenor') {
+                return <TenorGif key={idx} url={t.url} />;
+            }
+
+            if (t.type === 'text') {
+                return (
+                    <ReactMarkdown
+                        key={idx}
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            p: ({ children }) => <span>{children}</span>,
+                        }}
+                    >
+                        {t.text}
+                    </ReactMarkdown>
+                );
+            }
+            return null;
         });
 
 
@@ -207,11 +246,74 @@ export default function ChannelMessagesView() {
         }
     };
 
+    const TenorGif = ({ url }) => {
+        const [mediaUrl, setMediaUrl] = React.useState(null);
+
+        React.useEffect(() => {
+            let cancelled = false;
+            const load = async () => {
+                try {
+                    const res = await fetch(`/api/tenor/resolve?url=${encodeURIComponent(url)}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (!cancelled) setMediaUrl(data.mediaUrl || null);
+                } catch {
+                    // ignore
+                }
+            };
+            load();
+            return () => {
+                cancelled = true;
+            };
+        }, [url]);
+
+        if (!mediaUrl) {
+            // fallback: plain link until resolved
+            return (
+                <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#8ab4f8', textDecoration: 'none', margin: '0 2px' }}
+                >
+                    {url}
+                </a>
+            );
+        }
+
+        const isMp4 = mediaUrl.endsWith('.mp4');
+
+        return isMp4 ? (
+            <video
+                src={mediaUrl}
+                autoPlay
+                loop
+                muted
+                playsInline
+                style={{
+                    maxWidth: 260,
+                    maxHeight: 260,
+                    borderRadius: 4,
+                    margin: '4px 0',
+                }}
+            />
+        ) : (
+            <img
+                src={mediaUrl}
+                alt="Tenor GIF"
+                style={{
+                    maxWidth: 260,
+                    maxHeight: 260,
+                    borderRadius: 4,
+                    margin: '4px 0',
+                }}
+            />
+        );
+    };
+
+
     return (
-        <Box
-            sx={{ maxHeight: '80vh', overflow: 'auto' }}
-            onScroll={handleScroll}
-        >
+        <Box>
             <Typography variant="h5" gutterBottom>
                 Channel Messages
             </Typography>
@@ -224,76 +326,138 @@ export default function ChannelMessagesView() {
             >
                 ← Back to Manage Channels
             </Button>
+            <Box
+                sx={{
+                    maxHeight: '75vh',      // adjust as you like
+                    overflow: 'auto',
+                }}
+                onScroll={handleScroll}    // your infinite-scroll handler, if used
+            >
+                <TableContainer component={Paper}>
+                    <Table size="small">
+                        <TableHead>
+                            <TableRow>
+                                <TableCell>Timestamp</TableCell>
+                                <TableCell>Author</TableCell>
+                                <TableCell>Message</TableCell>
+                            </TableRow>
+                        </TableHead>
+                        <TableBody>
+                            {messages.map((m) => {
+                                const rowStyle = m.is_deleted
+                                    ? { textDecoration: 'line-through', opacity: 0.7 }
+                                    : {};
+                                const canShowRevisions = m.has_edits;
 
-            <TableContainer component={Paper}>
-                <Table size="small">
-                    <TableHead>
-                        <TableRow>
-                            <TableCell>Timestamp</TableCell>
-                            <TableCell>Author</TableCell>
-                            <TableCell>Message</TableCell>
-                        </TableRow>
-                    </TableHead>
-                    <TableBody>
-                        {messages.map((m) => {
-                            const rowStyle = m.is_deleted
-                                ? { textDecoration: 'line-through', opacity: 0.7 }
-                                : {};
-                            const canShowRevisions = m.has_edits;
+                                return (
+                                    <TableRow key={m.discord_message_id} sx={rowStyle}>
+                                        <TableCell>
+                                            {new Date(m.created_at).toLocaleString('en-GB', {
+                                                year: 'numeric',
+                                                month: '2-digit',
+                                                day: '2-digit',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                second: '2-digit',
+                                                hour12: false, // 24h clock[web:674][web:672]
+                                            })}
+                                        </TableCell>
+                                        <TableCell>{m.display_author}</TableCell>
+                                        <TableCell
+                                            onMouseEnter={
+                                                canShowRevisions
+                                                    ? (e) => handleMouseEnterMessage(e, m.discord_message_id)
+                                                    : undefined
+                                            }
+                                            onMouseLeave={canShowRevisions ? handleMouseLeaveMessage : undefined}
+                                            style={{
+                                                cursor: canShowRevisions ? 'help' : 'default',
+                                                textDecoration: canShowRevisions ? 'underline' : 'none',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-word',
+                                            }}
+                                        >
+                                            {renderContentTokens(m.content_tokens || [])}
 
-                            return (
-                                <TableRow key={m.discord_message_id} sx={rowStyle}>
-                                    <TableCell>
-                                        {new Date(m.created_at).toLocaleString('en-GB', {
-                                            year: 'numeric',
-                                            month: '2-digit',
-                                            day: '2-digit',
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                            second: '2-digit',
-                                            hour12: false, // 24h clock[web:674][web:672]
-                                        })}
-                                    </TableCell>
-                                    <TableCell>{m.display_author}</TableCell>
-                                    <TableCell
-                                        onMouseEnter={
-                                            canShowRevisions
-                                                ? (e) => handleMouseEnterMessage(e, m.discord_message_id)
-                                                : undefined
-                                        }
-                                        onMouseLeave={canShowRevisions ? handleMouseLeaveMessage : undefined}
-                                        style={{
-                                            cursor: canShowRevisions ? 'help' : 'default',
-                                            textDecoration: canShowRevisions ? 'underline' : 'none',
-                                            whiteSpace: 'pre-wrap',
-                                            wordBreak: 'break-word',
-                                        }}
-                                    >
-                                        {renderContentTokens(m.content_tokens || [])}
+                                            {m.attachments && m.attachments.length > 0 && (
+                                                <Box sx={{ mt: 0.5 }}>
+                                                    {m.attachments.map((att) => {
+                                                        const isImage =
+                                                            (att.contentType && att.contentType.startsWith('image/')) ||
+                                                            /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(att.filename || '');
+                                                        const sizeKb =
+                                                            typeof att.size === 'number'
+                                                                ? `${Math.round(att.size / 1024)} kB`
+                                                                : null;
+                                                        const href = att.local ? att.apiUrl : att.url;
+                                                        return (
+                                                            <Box
+                                                                key={att.id}
+                                                                sx={{ mb: 0.5, display: 'flex', flexDirection: 'column' }}
+                                                            >
+                                                                <Box sx={{ display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+                                                                    <AttachFileIcon
+                                                                        sx={{ fontSize: 16, mr: 0.5, color: 'text.secondary' }}
+                                                                    />
+                                                                    <a
+                                                                        href={href}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        style={{ color: '#8ab4f8', textDecoration: 'none' }}
+                                                                    >
+                                                                        {att.filename}
+                                                                    </a>
+                                                                    {sizeKb && (
+                                                                        <span style={{ marginLeft: 4, color: '#999' }}>
+                                                                            ({sizeKb})
+                                                                        </span>
+                                                                    )}
+                                                                </Box>
+
+                                                                {isImage && (
+                                                                    <Box
+                                                                        component="img"
+                                                                        src={href}
+                                                                        alt={att.filename}
+                                                                        sx={{
+                                                                            mt: 0.5,
+                                                                            maxWidth: 240,
+                                                                            maxHeight: 240,
+                                                                            borderRadius: 1,
+                                                                            border: '1px solid rgba(255,255,255,0.08)',
+                                                                            objectFit: 'contain',
+                                                                        }}
+                                                                    />
+                                                                )}
+                                                            </Box>
+                                                        );
+                                                    })}
+                                                </Box>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })}
+
+                            {loadingMore && (
+                                <TableRow>
+                                    <TableCell colSpan={3} align="center">
+                                        Loading…
                                     </TableCell>
                                 </TableRow>
-                            );
-                        })}
+                            )}
 
-                        {loadingMore && (
-                            <TableRow>
-                                <TableCell colSpan={3} align="center">
-                                    Loading…
-                                </TableCell>
-                            </TableRow>
-                        )}
-
-                        {!hasMore && messages.length > 0 && (
-                            <TableRow>
-                                <TableCell colSpan={3} align="center">
-                                    End of messages
-                                </TableCell>
-                            </TableRow>
-                        )}
-                    </TableBody>
-                </Table>
-            </TableContainer>
-
+                            {!hasMore && messages.length > 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={3} align="center">
+                                        End of messages
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
+                </TableContainer>
+            </Box>
             <Popover
                 open={open}
                 anchorEl={anchorEl}

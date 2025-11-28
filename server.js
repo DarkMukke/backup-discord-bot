@@ -7,13 +7,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import connectPgSimple from 'connect-pg-simple';
 const PgSession = connectPgSimple(session);
+import fetch from 'node-fetch';
 
 
 import authRouter from './auth.js';
 import guildRouter from './api-guild.js';
 import channelRouter from './api-channel.js';
 import './bot.js';
-import { pool } from './db.js';
+import { pool, query } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,16 +65,56 @@ app.get('/api/me', (req, res) => {
     res.json({ authenticated: true, user: req.session.user });
 });
 
-// Placeholder APIs to extend later
-app.get('/api/guilds', (req, res) => {
-    if (!req.session.user) return res.sendStatus(401);
-    res.json([]); // TODO: implement
+app.get('/api/attachments/:id', async (req, res) => {
+    const { id } = req.params;
+    const [row] = await query(
+        `
+      SELECT filename, content_type, blob_data
+      FROM stored_attachments
+      WHERE id = $1
+    `,
+        [id]
+    );
+    if (!row) return res.sendStatus(404);
+
+    res.setHeader('Content-Type', row.content_type || 'application/octet-stream');
+    res.setHeader(
+        'Content-Disposition',
+        `inline; filename="${row.filename.replace(/"/g, '')}"`
+    );
+    res.send(row.blob_data);
 });
 
-app.get('/api/channels', (req, res) => {
-    if (!req.session.user) return res.sendStatus(401);
-    res.json([]); // TODO: implement
+const tenorCache = new Map(); // url -> mediaUrl
+app.get('/api/tenor/resolve', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    if (tenorCache.has(url)) {
+        return res.json({ mediaUrl: tenorCache.get(url) });
+    }
+
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return res.status(502).json({ error: 'failed to fetch tenor' });
+        const html = await r.text();
+
+        // Crude extraction: look for a .mp4 or .gif URL in the page
+        const m =
+            html.match(/https:\/\/media\.tenor\.com\/[^"']+\.(mp4|gif)/i) ||
+            html.match(/https:\/\/c\.tenor\.com\/[^"']+\.(mp4|gif)/i);
+
+        if (!m) return res.json({ mediaUrl: null });
+
+        const mediaUrl = m[0];
+        tenorCache.set(url, mediaUrl);
+        res.json({ mediaUrl });
+    } catch (e) {
+        console.error('tenor resolve error', e);
+        res.status(500).json({ error: 'tenor resolve failed' });
+    }
 });
+
 
 // Serve built React UI from ui/dist (production)
 const uiDistPath = path.join(__dirname, 'ui', 'dist');

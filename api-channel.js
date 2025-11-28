@@ -169,6 +169,7 @@ router.get('/:discordChannelId/messages', async (req, res) => {
     const guildId = channelRow.guild_id;
     const guild = await client.guilds.fetch(guildId);
 
+    // Build WHERE and params
     const params = [channelRow.id];
     let where = 'm.channel_id = $1 AND m.is_current_revision = TRUE';
     if (cursor) {
@@ -176,7 +177,10 @@ router.get('/:discordChannelId/messages', async (req, res) => {
         where += ' AND m.discord_message_id < $2::bigint';
     }
 
-    params.push(limit);
+    // LIMIT is always the last placeholder
+    params.push(Number(limit));
+    const limitParamIndex = params.length;
+
     const rows = await query(
         `
             SELECT
@@ -185,15 +189,42 @@ router.get('/:discordChannelId/messages', async (req, res) => {
                 m.author_username,
                 m.created_at,
                 m.content_markdown,
-                m.edit_group_id,
                 m.is_deleted,
-                (SELECT COUNT(*) FROM messages m2
-                 WHERE m2.edit_group_id = m.edit_group_id) > 1 AS has_edits
+                m.edit_group_id,
+                m.attachment_summary,
+                (
+                    SELECT COUNT(*)
+                    FROM messages m2
+                    WHERE m2.edit_group_id = m.edit_group_id
+                ) > 1 AS has_edits,
+                COALESCE(
+                                json_agg(
+                                json_build_object(
+                                        'id', sa.id,
+                                        'discord_attachment_id', sa.discord_attachment_id,
+                                        'filename', sa.filename,
+                                        'size_bytes', sa.size_bytes,
+                                        'content_type', sa.content_type
+                                )
+                                        ) FILTER (WHERE sa.id IS NOT NULL),
+                                '[]'
+                ) AS stored_attachments
             FROM messages m
+                     LEFT JOIN stored_attachments sa
+                               ON sa.message_id = m.id
             WHERE ${where}
+            GROUP BY
+                m.discord_message_id,
+                m.author_id,
+                m.author_username,
+                m.created_at,
+                m.content_markdown,
+                m.is_deleted,
+                m.edit_group_id,
+                m.attachment_summary
             ORDER BY m.discord_message_id DESC
-            LIMIT $${params.length}
-    `,
+            LIMIT $${limitParamIndex}::int
+  `,
         params
     );
 
@@ -220,27 +251,63 @@ router.get('/:discordChannelId/messages', async (req, res) => {
         const tokens = [];
         let lastIndex = 0;
 
-        // user | role | channel | relative timestamp[web:610]
-        const regex = /<@!?(\d+)>|<@&(\d+)>|<#(\d+)>|<t:(\d+):R>/g;
-        let match;
+        // existing regex: users/roles/channels/timestamps/emojis
+        const mainRegex =
+            /<@!?(\d+)>|<@&(\d+)>|<#(\d+)>|<t:(\d+):R>|<(a?):([a-zA-Z0-9_]+):(\d+)>/g;
 
-        while ((match = regex.exec(text)) !== null) {
-            if (match.index > lastIndex) {
+        // helper to further split plain text into text + tenor links
+        const pushTextWithTenor = (chunk) => {
+            const urlRegex = /(https?:\/\/(?:\S*tenor\.com\S*))/gi;
+            let last = 0;
+            let m;
+            while ((m = urlRegex.exec(chunk)) !== null) {
+                if (m.index > last) {
+                    tokens.push({ type: 'text', text: chunk.slice(last, m.index) });
+                }
                 tokens.push({
-                    type: 'text',
-                    text: text.slice(lastIndex, match.index),
+                    type: 'tenor',
+                    url: m[1],
                 });
+                last = urlRegex.lastIndex;
+            }
+            if (last < chunk.length) {
+                tokens.push({ type: 'text', text: chunk.slice(last) });
+            }
+        };
+
+        let match;
+        while ((match = mainRegex.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                pushTextWithTenor(text.slice(lastIndex, match.index));
             }
 
             if (match[1]) {
+                // user mention
                 const id = match[1];
+
+                let label = `<@${id}>`; // safe fallback
                 const member = members.get(id);
+
+                if (member) {
+                    label = `@${member.displayName}`;
+                } else {
+                    // try global user cache
+                    const user = client.users.cache.get(id);
+                    if (user) {
+                        label = `@${user.username}`;
+                    } else {
+                        //label = `@${id}`;
+                        label = `@Unknown user(${id})`;
+                    }
+                }
+
                 tokens.push({
                     type: 'user',
                     id,
-                    label: member ? `@${member.displayName}` : match[0],
+                    label,
                 });
             } else if (match[2]) {
+                // role
                 const id = match[2];
                 const role = roles.get(id);
                 tokens.push({
@@ -249,6 +316,7 @@ router.get('/:discordChannelId/messages', async (req, res) => {
                     label: role ? `@${role.name}` : match[0],
                 });
             } else if (match[3]) {
+                // channel
                 const id = match[3];
                 const ch = channels.get(id);
                 tokens.push({
@@ -257,36 +325,93 @@ router.get('/:discordChannelId/messages', async (req, res) => {
                     label: ch ? `#${ch.name}` : match[0],
                 });
             } else if (match[4]) {
-                // timestamp <t:1764581844:R>
+                // timestamp <t:...:R>
                 const tsSeconds = Number(match[4]);
+                tokens.push({ type: 'timestamp', ts: tsSeconds });
+            } else if (match[5] !== undefined) {
+                // custom emoji: <a:name:id> or <:name:id>
+                const animatedFlag = match[5]; // 'a' or ''
+                const name = match[6];
+                const id = match[7];
                 tokens.push({
-                    type: 'timestamp',
-                    ts: tsSeconds,
+                    type: 'emoji',
+                    id,
+                    name,
+                    animated: animatedFlag === 'a',
                 });
             }
 
-            lastIndex = regex.lastIndex;
+            lastIndex = mainRegex.lastIndex;
         }
 
         if (lastIndex < text.length) {
-            tokens.push({
-                type: 'text',
-                text: text.slice(lastIndex),
-            });
+            pushTextWithTenor(text.slice(lastIndex));
         }
 
         return tokens;
     };
 
 
+
     const messages = rows.map((r) => {
         const member = members.get(r.author_id);
         const displayAuthor = member?.displayName || r.author_username;
+
+        // decode attachment_summary
+        let attachments = [];
+        const raw = r.attachment_summary;
+
+        if (Array.isArray(raw)) {
+            attachments = raw;
+        } else if (typeof raw === 'string' && raw.trim() !== '') {
+            try {
+                attachments = JSON.parse(raw);
+            } catch (e) {
+                console.warn('Bad attachment_summary JSON for', r.discord_message_id, e);
+                attachments = [];
+            }
+        } else if (raw && typeof raw === 'object') {
+            attachments = [raw];
+        }
+
+        // parse stored_attachments
+        const storedList = Array.isArray(r.stored_attachments)
+            ? r.stored_attachments
+            : typeof r.stored_attachments === 'string' && r.stored_attachments.trim() !== ''
+                ? JSON.parse(r.stored_attachments)
+                : [];
+
+        // index by filename for this message
+        const storedByKey = new Map(
+            storedList.map((sa) => [`${sa.filename}|${sa.size_bytes}`, sa])
+        );
+
+        const enrichedAttachments = attachments.map((att) => {
+            const key = `${att.filename}|${att.size}`;
+            const stored = storedByKey.get(key);
+
+            if (stored) {
+                return {
+                    ...att,
+                    local: true,
+                    apiUrl: `/api/attachments/${stored.id}`,
+                    size: stored.size_bytes ?? att.size,
+                    contentType: stored.content_type ?? att.contentType,
+                };
+            }
+
+            return {
+                ...att,
+                local: false,
+                apiUrl: att.url,
+            };
+        });
 
         return {
             ...r,
             display_author: displayAuthor,
             content_tokens: tokenizeContent(r.content_markdown),
+            attachments: enrichedAttachments,
         };
     });
 

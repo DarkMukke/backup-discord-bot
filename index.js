@@ -1,5 +1,6 @@
 // AFTER (ESM, index.js)
 import 'dotenv/config';
+import fetch from 'node-fetch';
 import { query } from './db.js';
 import { client } from './bot.js';
 
@@ -237,6 +238,117 @@ async function getChannelsToBackfill() {
   `);
 }
 
+async function backfillAttachmentBlobs(batchSize = 50) {
+    //console.log(`Backfill attachment blobs: ${batchSize}`);
+    // 1) Find messages that have attachment_summary and at least one attachment not yet stored
+    const messages = await query(
+        `
+            SELECT id AS message_id, attachment_summary
+            FROM messages
+            WHERE attachment_summary IS NOT NULL
+              AND attachment_summary <> '[]'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM stored_attachments sa
+                WHERE sa.message_id = messages.id
+            )
+                LIMIT $1
+        `,
+        [batchSize]
+    );
+
+    if (messages.length === 0) {
+        //console.log('blob backfill: no candidate messages');
+        return;
+    }
+
+    for (const msg of messages) {
+        let attachments = [];
+        const raw = msg.attachment_summary;
+
+        // Same decoding logic as API
+        if (Array.isArray(raw)) {
+            attachments = raw;
+        } else if (typeof raw === 'string' && raw.trim() !== '') {
+            try {
+                attachments = JSON.parse(raw);
+            } catch (e) {
+                console.warn('blob backfill: bad attachment_summary JSON for message', msg.message_id, e);
+                attachments = [];
+            }
+        } else if (raw && typeof raw === 'object') {
+            attachments = [raw];
+        }
+
+        if (!attachments.length) continue;
+
+        for (const att of attachments) {
+            if (!att || !att.id || !att.url) continue;
+
+            // Skip if already stored
+            const existing = await query(
+                `
+                    SELECT 1
+                    FROM stored_attachments
+                    WHERE discord_attachment_id = $1 AND message_id = $2
+                        LIMIT 1
+                `,
+                [att.id, msg.message_id]
+            );
+            if (existing.length) continue;
+
+            // Enforce size limit (10 MB)
+            if (att.size && att.size > 10 * 1024 * 1024) {
+                console.log('blob backfill: skipping large attachment', att.id, att.size);
+                continue;
+            }
+
+            try {
+                const res = await fetch(att.url);
+                if (!res.ok) {
+                    console.warn('blob backfill: fetch failed', att.url, res.status);
+                    continue;
+                }
+                const buf = Buffer.from(await res.arrayBuffer());
+                const size = att.size || buf.length;
+
+                if (size > 10 * 1024 * 1024) {
+                    // In case size was unknown and the downloaded file is too big
+                    console.log('blob backfill: downloaded too large, skipping', att.id, size);
+                    continue;
+                }
+
+                await query(
+                    `
+            INSERT INTO stored_attachments (
+              discord_attachment_id,
+              message_id,
+              filename,
+              size_bytes,
+              content_type,
+              url,
+              blob_data
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `,
+                    [
+                        att.id,
+                        msg.message_id,
+                        att.filename || 'file',
+                        size,
+                        att.contentType || res.headers.get('content-type'),
+                        att.url,
+                        buf,
+                    ]
+                );
+                //console.log('blob backfill: stored attachment', att.id, 'for message', msg.message_id);
+            } catch (e) {
+                console.error('blob backfill: error for attachment', att?.id, e);
+            }
+        }
+    }
+}
+
 async function backfillLoop() {
     setInterval(async () => {
         const channels = await getChannelsToBackfill();
@@ -248,6 +360,13 @@ async function backfillLoop() {
             }
         }
     }, 30_000);
+    setInterval(async () => {
+        try {
+            await backfillAttachmentBlobs(50);
+        } catch (err) {
+            console.error('backfill error for blobs', err);
+        }
+    }, 60_000);
 }
 
 

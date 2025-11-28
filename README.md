@@ -20,6 +20,8 @@ This is a simple discord bot, written because it was requested by a friend so al
 - Renders roles, usernames, channels, time stamps, bot messages, etc
 - Uses "Endless Scroll" on the messages, 50 messages at a time
 - Uses postgres sessions to stay logged in between bot restarts
+- Backs up attachments in Postgres in a BYTEA column on a separate loop if attachment < 10mb
+- Render emoji's and Tenor Gifs ( these are not backed up, as they are external )
 
 ## Install
 Currently only supports Postgres, schema can be found in [docs/db-schema.md](docs/db-schema.md)
@@ -37,4 +39,4 @@ cd ui && npm i && npm run build && cd ..
 pm2 start ecosystem.config.cjs
 ```
 
-Now either run it on your selected port or use a reverse proxy ( example for nginx can be found in the docs 1)
+Now either run it on your selected port or use a reverse proxy ( example for nginx can be found in the docs )
