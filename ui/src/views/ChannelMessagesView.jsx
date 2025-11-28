@@ -344,13 +344,11 @@ export default function ChannelMessagesView() {
                         </TableHead>
                         <TableBody>
                             {messages.map((m) => {
-                                const rowStyle = m.is_deleted
-                                    ? { textDecoration: 'line-through', opacity: 0.7 }
-                                    : {};
+                                const isDeleted = m.is_deleted;
                                 const canShowRevisions = m.has_edits;
 
                                 return (
-                                    <TableRow key={m.discord_message_id} sx={rowStyle}>
+                                    <TableRow key={m.discord_message_id} sx={{ opacity: isDeleted ? 0.7 : 1 }}>
                                         <TableCell>
                                             {new Date(m.created_at).toLocaleString('en-GB', {
                                                 year: 'numeric',
@@ -372,7 +370,11 @@ export default function ChannelMessagesView() {
                                             onMouseLeave={canShowRevisions ? handleMouseLeaveMessage : undefined}
                                             style={{
                                                 cursor: canShowRevisions ? 'help' : 'default',
-                                                textDecoration: canShowRevisions ? 'underline' : 'none',
+                                                textDecoration: isDeleted
+                                                    ? 'line-through'
+                                                    : canShowRevisions
+                                                        ? 'underline'
+                                                        : 'none',
                                                 whiteSpace: 'pre-wrap',
                                                 wordBreak: 'break-word',
                                             }}

@@ -151,7 +151,7 @@ client.on('messageDelete', async (message) => {
         await query(
             `
       UPDATE messages
-      SET is_deleted = TRUE, updated_at = NOW()
+      SET is_deleted = TRUE
       WHERE discord_message_id = $1
       `,
             [message.id]
@@ -299,14 +299,14 @@ async function backfillAttachmentBlobs(batchSize = 50) {
 
             // Enforce size limit (10 MB)
             if (att.size && att.size > 10 * 1024 * 1024) {
-                console.log('blob backfill: skipping large attachment', att.id, att.size);
+               // console.log('blob backfill: skipping large attachment', att.id, att.size);
                 continue;
             }
 
             try {
                 const res = await fetch(att.url);
                 if (!res.ok) {
-                    console.warn('blob backfill: fetch failed', att.url, res.status);
+                    //console.warn('blob backfill: fetch failed', att.url, res.status);
                     continue;
                 }
                 const buf = Buffer.from(await res.arrayBuffer());
@@ -314,7 +314,7 @@ async function backfillAttachmentBlobs(batchSize = 50) {
 
                 if (size > 10 * 1024 * 1024) {
                     // In case size was unknown and the downloaded file is too big
-                    console.log('blob backfill: downloaded too large, skipping', att.id, size);
+                    //console.log('blob backfill: downloaded too large, skipping', att.id, size);
                     continue;
                 }
 

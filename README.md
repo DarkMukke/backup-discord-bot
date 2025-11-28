@@ -16,7 +16,7 @@ This is a simple discord bot, written because it was requested by a friend so al
   - Backing up a channel also back's up its threads
 - Tracks message edits and deletes
 - Uses a backfill message id, to be able to pickup where it last off in case of bot restarts
-  - This also ensures that the bot is rate limited on the Discord API, by scanning 50 messages every 30 seconds per channel ( so if you do 10 channels at the same time this is still 350 messages/min)
+  - This also ensures that the bot is rate limited on the Discord API, by scanning 50 messages every 30 seconds per channel ( so if you do 10 channels at the same time this is still 250 messages/min)
 - Renders roles, usernames, channels, time stamps, bot messages, etc
 - Uses "Endless Scroll" on the messages, 50 messages at a time
 - Uses postgres sessions to stay logged in between bot restarts
